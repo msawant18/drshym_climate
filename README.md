@@ -17,7 +17,7 @@ curl -X POST http://localhost:8080/v1/segment   -H 'Content-Type: application/js
   }'
 ```
 ## Repository Structure
-
+```bash
 drshym_climate/
 ├── README.md                 # Project overview & usage
 ├── LICENSE                   # MIT License
@@ -73,7 +73,7 @@ drshym_climate/
 └── .github/
     └── workflows/
         └── ci.yml            # Continuous Integration: pytest + Docker build
-
+```
     
 ### Response
 Returns URIs for `mask`, `proba`, and `overlay_png`, plus a brief caption and provenance.
