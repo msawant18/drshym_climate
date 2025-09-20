@@ -1,0 +1,7 @@
+{
+  "threshold": 0.45,
+  "calibration": {
+    "method": "temperature",
+    "T": 1.0
+  }
+}

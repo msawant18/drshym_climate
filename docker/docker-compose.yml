@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  drshym_api:
+    build: ../
+    image: drshym_climate:latest
+    container_name: drshym_api
+    environment:
+      - OUTPUTS=/outputs
+      - DRSHYM_THRESHOLD=0.45
+      - DRSHYM_EXPORT_GEOJSON=1
+    volumes:
+      - ../:/app
+      - ../data:/data
+      - ../outputs:/outputs
+    ports:
+      - "8080:8080"
+    command: ["python", "serve/api.py"]
