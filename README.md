@@ -16,7 +16,65 @@ curl -X POST http://localhost:8080/v1/segment   -H 'Content-Type: application/js
     "options": {"tile":512, "overlap":64, "explain": true}
   }'
 ```
+## Repository Structure
 
+drshym_climate/
+├── README.md                 # Project overview & usage
+├── LICENSE                   # MIT License
+├── .gitignore                # Ignore cache, artifacts, outputs, envs
+├── docker/
+│   ├── Dockerfile            # Base image (PyTorch + FastAPI + rasterio)
+│   └── docker-compose.yml    # Orchestration for serving API
+├── configs/
+│   └── flood.yaml            # Training & inference configuration
+├── ingest/
+│   ├── __init__.py
+│   ├── geotiff_loader.py     # GeoTIFF reader, normalization, DrShymRecord
+│   └── tiler.py              # Sliding window tiling of scenes
+├── models/
+│   ├── __init__.py
+│   ├── encoder_backbones.py  # ResNet18 backbone factory
+│   ├── unet.py               # UNet segmentation model
+│   └── infer.py              # Inference helpers
+├── eval/
+│   ├── __init__.py
+│   ├── metrics.py            # IoU, F1, precision, recall, Brier, ECE
+│   ├── calibrate.py          # Temperature scaling calibration
+│   └── slices.py             # Per-landcover/slope/intensity error slicing
+├── serve/
+│   ├── __init__.py
+│   ├── api.py                # FastAPI service (/v1/segment)
+│   └── schemas.py            # Request/response schemas
+├── explain/
+│   ├── __init__.py
+│   ├── cam.py                # Grad-CAM explainability
+│   └── overlay.py            # Overlay PNG generator
+├── utils/
+│   ├── __init__.py
+│   ├── geo.py                # Blending weights for stitching
+│   ├── io.py                 # JSON I/O helpers
+│   └── seed.py               # Seed fixing for reproducibility
+├── scripts/
+│   ├── train.py              # Training loop
+│   ├── predict_folder.py     # Folder inference for tiles
+│   └── export_stitched.py    # Tile stitching to scene mask
+├── artifacts/
+│   ├── checkpoints/          # Saved model weights
+│   │   └── .gitkeep
+│   └── thresholds.json       # Calibrated threshold metadata
+├── docs/
+│   ├── model_card.md         # Model details, intended use & limitations
+│   └── dataset_card.md       # Dataset sources & preprocessing notes
+├── tests/
+│   ├── conftest.py           # Add repo root to sys.path for pytest
+│   ├── test_loader.py        # Tests tiler/loader functions
+│   ├── test_schema.py        # Tests DrShymRecord schema
+│   └── test_metrics.py       # Tests IoU/F1 toy examples
+└── .github/
+    └── workflows/
+        └── ci.yml            # Continuous Integration: pytest + Docker build
+
+    
 ### Response
 Returns URIs for `mask`, `proba`, and `overlay_png`, plus a brief caption and provenance.
 
