@@ -42,7 +42,8 @@ jobs:
       - name: Demo inference on sample tile (no checkpoint)
         run: |
             mkdir -p outputs
-            python scripts/predict_folder.py --in data/scenes --out outputs
+            export PYTHONPATH="$PYTHONPATH:$PWD"
+            python -m scripts.predict_folder --in data/scenes --out outputs
 
       # --- Optional: Demo inference on a tiny sample if you commit one ---
       # - name: Demo inference (optional)
