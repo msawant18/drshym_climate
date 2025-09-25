@@ -30,13 +30,19 @@
 #     main(args.inp, args.ckpt, args.out)
 
 # scripts/predict_folder.py
-# Run: python scripts/predict_folder.py --in data/scenes --out outputs
-# (Optionally add: --ckpt artifacts/checkpoints/best.pt)
-
+# Usage:
+#   python -m scripts.predict_folder --in data/scenes --out outputs
+# or
+#   python scripts/predict_folder.py --in data/scenes --out outputs
 from __future__ import annotations
+
 import argparse
 import pathlib
+import sys
 from typing import Tuple
+
+# Ensure repo root is on sys.path when called as a script
+sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import torch
@@ -47,36 +53,45 @@ from models.encoder_backbones import make_encoder
 from utils.seed import fix_seeds
 
 
-def load_unet(ckpt_path: str | None,
-              encoder_name: str = "resnet18",
-              device: str = "cpu") -> torch.nn.Module:
-    """
-    Create UNet(encoder) and optionally load a checkpoint.
-    If ckpt_path is None/empty, returns a deterministic randomly-initialized model (for CI demo).
-    """
+def make_unet_flexible(encoder_name: str = "resnet18", device: str = "cpu") -> torch.nn.Module:
+    """Create UNet with a variety of possible constructor signatures.
+    Tries (num_classes=1) then (n_classes=1) then (out_channels=1), then no kwarg."""
     enc, channels = make_encoder(encoder_name)
-    model = UNet(enc, channels, n_classes=1)  # single-logit binary segmentation
+    model = None
+    last_err = None
+
+    for kwargs in ({"num_classes": 1}, {"n_classes": 1}, {"out_channels": 1}, {}):
+        try:
+            model = UNet(enc, channels, **kwargs)
+            break
+        except TypeError as e:
+            last_err = e
+
+    if model is None:
+        raise TypeError(
+            f"Could not instantiate UNet with any of the common output-arg names. Last error: {last_err}"
+        )
+
     model.to(device)
     model.eval()
+    return model
 
+
+def load_unet(ckpt_path: str | None, encoder_name: str = "resnet18", device: str = "cpu") -> torch.nn.Module:
+    """Load UNet and optionally a checkpoint. If no ckpt, return deterministic random model (for CI demo)."""
+    model = make_unet_flexible(encoder_name=encoder_name, device=device)
     if ckpt_path:
         state = torch.load(ckpt_path, map_location=device)
         state_dict = state.get("state_dict", state)
-        # allow partial matches to be robust across minor refactors
         missing, unexpected = model.load_state_dict(state_dict, strict=False)
         if missing or unexpected:
             print(f"[warn] load_state_dict mismatches -> missing={missing}, unexpected={unexpected}")
     else:
-        # Deterministic random weights (so CI output is stable)
         fix_seeds(42)
-
     return model
 
 
 def read_tif(path: str) -> Tuple[np.ndarray, dict]:
-    """
-    Read a single-band GeoTIFF as float32 array and return (array, profile).
-    """
     with rasterio.open(path) as src:
         arr = src.read(1).astype(np.float32)
         profile = src.profile
@@ -84,9 +99,6 @@ def read_tif(path: str) -> Tuple[np.ndarray, dict]:
 
 
 def normalize(arr: np.ndarray) -> np.ndarray:
-    """
-    Z-score normalize with small epsilon for numerical safety.
-    """
     mean = float(arr.mean())
     std = float(arr.std() + 1e-6)
     return (arr - mean) / std
@@ -100,22 +112,12 @@ def write_geotiff(path: str, data: np.ndarray, profile: dict, dtype: str):
 
 
 @torch.inference_mode()
-def infer_tile(model: torch.nn.Module,
-               tile_fp: pathlib.Path,
-               out_dir: pathlib.Path,
-               threshold: float,
-               device: str = "cpu") -> Tuple[pathlib.Path, pathlib.Path]:
-    """
-    Run model on one tile and write *_proba.tif and *_mask.tif to out_dir.
-    """
+def infer_tile(model: torch.nn.Module, tile_fp: pathlib.Path, out_dir: pathlib.Path, threshold: float, device: str = "cpu") -> Tuple[pathlib.Path, pathlib.Path]:
     arr, profile = read_tif(str(tile_fp))
-    arr_n = normalize(arr)
+    x = torch.from_numpy(normalize(arr)[None, None, ...]).to(device)
 
-    # to tensor: (B, C, H, W) = (1, 1, H, W)
-    x = torch.from_numpy(arr_n[None, None, ...]).to(device)
-
-    logits = model(x)                     # (1,1,H,W)
-    proba = torch.sigmoid(logits)[0, 0].cpu().numpy()  # (H,W)
+    logits = model(x)                            # (1,1,H,W) or compatible
+    proba = torch.sigmoid(logits)[0, 0].cpu().numpy()
     mask = (proba >= float(threshold)).astype(np.uint8)
 
     stem = tile_fp.stem
@@ -124,7 +126,6 @@ def infer_tile(model: torch.nn.Module,
 
     write_geotiff(str(proba_fp), proba, profile, dtype="float32")
     write_geotiff(str(mask_fp), mask, profile, dtype="uint8")
-
     return proba_fp, mask_fp
 
 
@@ -133,14 +134,12 @@ def main():
     ap.add_argument("--ckpt", type=str, default="", help="(optional) path to checkpoint .pt")
     ap.add_argument("--in", dest="in_dir", type=str, required=True, help="folder containing input *.tif tiles")
     ap.add_argument("--out", dest="out_dir", type=str, required=True, help="folder to write outputs")
-    ap.add_argument("--threshold", type=float, default=0.45, help="probability threshold for mask")
-    ap.add_argument("--encoder", type=str, default="resnet18", help="encoder backbone name")
+    ap.add_argument("--threshold", type=float, default=0.45)
+    ap.add_argument("--encoder", type=str, default="resnet18")
     args = ap.parse_args()
 
-    # CI / CPU default
-    device = "cpu"
+    device = "cpu"  # CI runners
     fix_seeds(42)
-
     model = load_unet(args.ckpt if args.ckpt else None, encoder_name=args.encoder, device=device)
 
     in_dir = pathlib.Path(args.in_dir)
