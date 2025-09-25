@@ -112,9 +112,33 @@ def write_geotiff(path: str, data: np.ndarray, profile: dict, dtype: str):
 
 
 @torch.inference_mode()
-def infer_tile(model: torch.nn.Module, tile_fp: pathlib.Path, out_dir: pathlib.Path, threshold: float, device: str = "cpu") -> Tuple[pathlib.Path, pathlib.Path]:
+def infer_tile(model: torch.nn.Module,
+               tile_fp: pathlib.Path,
+               out_dir: pathlib.Path,
+               threshold: float,
+               device: str = "cpu") -> Tuple[pathlib.Path, pathlib.Path]:
     arr, profile = read_tif(str(tile_fp))
-    x = torch.from_numpy(normalize(arr)[None, None, ...]).to(device)
+    x = torch.from_numpy(normalize(arr)[None, None, ...]).to(device)  # (1,1,H,W)
+
+    # --- NEW: adapt channels if encoder expects 3 ---
+    try:
+        expected_c = None
+        # try to infer from the first Conv2d we find
+        for m in model.modules():
+            if isinstance(m, torch.nn.Conv2d):
+                expected_c = m.in_channels
+                break
+        if expected_c is None:
+            expected_c = 1  # be safe
+        if x.shape[1] == 1 and expected_c == 3:
+            x = x.repeat(1, 3, 1, 1)  # (1,3,H,W)
+        elif x.shape[1] == 3 and expected_c == 1:
+            x = x[:, :1, :, :]
+    except Exception:
+        # conservative fallback for ResNet-style encoders
+        if x.shape[1] == 1:
+            x = x.repeat(1, 3, 1, 1)
+    # --- end NEW ---
 
     logits = model(x)                            # (1,1,H,W) or compatible
     proba = torch.sigmoid(logits)[0, 0].cpu().numpy()
@@ -122,40 +146,11 @@ def infer_tile(model: torch.nn.Module, tile_fp: pathlib.Path, out_dir: pathlib.P
 
     stem = tile_fp.stem
     proba_fp = out_dir / f"{stem}_proba.tif"
-    mask_fp = out_dir / f"{stem}_mask.tif"
+    mask_fp  = out_dir / f"{stem}_mask.tif"
 
     write_geotiff(str(proba_fp), proba, profile, dtype="float32")
-    write_geotiff(str(mask_fp), mask, profile, dtype="uint8")
+    write_geotiff(str(mask_fp),  mask,  profile, dtype="uint8")
     return proba_fp, mask_fp
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", type=str, default="", help="(optional) path to checkpoint .pt")
-    ap.add_argument("--in", dest="in_dir", type=str, required=True, help="folder containing input *.tif tiles")
-    ap.add_argument("--out", dest="out_dir", type=str, required=True, help="folder to write outputs")
-    ap.add_argument("--threshold", type=float, default=0.45)
-    ap.add_argument("--encoder", type=str, default="resnet18")
-    args = ap.parse_args()
-
-    device = "cpu"  # CI runners
-    fix_seeds(42)
-    model = load_unet(args.ckpt if args.ckpt else None, encoder_name=args.encoder, device=device)
-
-    in_dir = pathlib.Path(args.in_dir)
-    out_dir = pathlib.Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    tifs = sorted(in_dir.glob("*.tif"))
-    if not tifs:
-        print(f"[warn] no .tif files found under: {in_dir.resolve()}")
-        return
-
-    print(f"[info] found {len(tifs)} tiles; writing outputs to: {out_dir.resolve()}")
-    for tif in tifs:
-        proba_fp, mask_fp = infer_tile(model, tif, out_dir, threshold=args.threshold, device=device)
-        print(f"[ok] {tif.name} -> {proba_fp.name}, {mask_fp.name}")
-
 
 if __name__ == "__main__":
     main()
